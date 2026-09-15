@@ -103,9 +103,14 @@ saved.
 
 ## Known limitations
 
-- No phone/mobile client yet.
 - The hotkey → microphone → paste flow requires a live desktop session
   (it can't run in a headless environment).
+
+## Planned / possible future features
+
+- A phone/mobile client — the transcription/cleanup pipeline itself is
+  plain Python with no Windows-specific code, so it could be reused by a
+  client on another platform.
 
 ## License
 
