@@ -1,0 +1,11 @@
+CHECKPOINT.md
+BACKLOG.md
+__pycache__/
+*.pyc
+.pytest_cache/
+history/
+*.wav
+*.egg-info/
+_smoke_test_output.txt
+dist_nuitka/
+installer_output/
