@@ -32,3 +32,10 @@ def _content_words(text: str) -> set[str]:
 def missing_words(source: str, output: str) -> set[str]:
     """Content words present in `source` but absent anywhere in `output`."""
     return _content_words(source) - _content_words(output)
+
+
+def added_words(source: str, output: str) -> set[str]:
+    """Content words present in `output` but absent from `source`. A model that
+    answers a dictated question instead of cleaning it up shows up here as a
+    burst of new words. The "unclear" word from the [UNCLEAR] marker is ignored."""
+    return _content_words(output) - _content_words(source) - {"unclear"}

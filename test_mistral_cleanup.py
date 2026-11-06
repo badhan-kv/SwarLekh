@@ -39,7 +39,7 @@ def test_clean_uses_transcribe_prompt_for_transcribe_mode():
     mistral_cleanup.clean(client, cr.MODE_TRANSCRIBE, "hello")
     _, kwargs = client.chat.complete.call_args
     assert kwargs["messages"][0]["content"] == mistral_cleanup.TRANSCRIBE_PROMPT
-    assert kwargs["messages"][1]["content"] == "hello"
+    assert kwargs["messages"][1]["content"] == "<transcript>\nhello\n</transcript>"
     assert kwargs["model"] == mistral_cleanup.DEFAULT_MODEL
 
 
@@ -98,6 +98,34 @@ def test_clean_stops_retrying_after_max_attempts_and_returns_last(capsys):
     assert result == "still missing it"
     assert client.chat.complete.call_count == 3  # 1 initial + 2 verify-retries
     assert "honestly" in capsys.readouterr().out.lower()
+
+
+ANSWER = "The logged outcomes are success, failure, and timeout, each recorded per request."
+
+
+def test_clean_retries_when_model_answers_the_question():
+    client = MagicMock()
+    client.chat.complete.side_effect = [_response(ANSWER), _response("What are the logged outcomes?")]
+    result = mistral_cleanup.clean(client, cr.MODE_TRANSCRIBE, "what are the logged outcomes")
+    assert result == "What are the logged outcomes?"
+    assert client.chat.complete.call_count == 2
+    _, kwargs = client.chat.complete.call_args
+    assert "not a question" in kwargs["messages"][-1]["content"].lower()
+
+
+def test_clean_falls_back_to_transcript_when_model_keeps_answering(capsys):
+    client = MagicMock()
+    client.chat.complete.return_value = _response(ANSWER)
+    result = mistral_cleanup.clean(client, cr.MODE_TRANSCRIBE, "what are the logged outcomes")
+    assert result == "what are the logged outcomes"
+    assert "answered instead" in capsys.readouterr().out
+
+
+def test_notes_mode_may_add_topic_headers_without_triggering_guard():
+    client = _fake_client("Release Planning:\n- Ship the beta on Friday.")
+    result = mistral_cleanup.clean(client, cr.MODE_NOTES, "ship the beta on Friday")
+    assert result.startswith("Release Planning:")
+    client.chat.complete.assert_called_once()
 
 
 def test_clean_no_retry_when_output_already_preserves_everything():
