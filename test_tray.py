@@ -9,6 +9,12 @@ import httpx
 import tray
 
 
+@pytest.fixture(autouse=True)
+def _keys_report_as_physically_down(monkeypatch):
+    # Simulated _on_press calls have no real keys held; treat all as down.
+    monkeypatch.setattr("tray.hotkey_combo.prune_released", lambda held, is_down=None: set(held))
+
+
 def _make_app():
     with patch("tray.audio.Recorder"), patch("tray.pystray.Icon"), patch("tray.config.get_hotkey", return_value=None):
         return tray.DictationApp()
@@ -124,7 +130,7 @@ def test_main_exits_if_startup_failed():
     # after the GUI root's mainloop is running — see DictationApp._run_icon),
     # not in main() directly, so a failed startup surfaces as _startup_failed
     # being set by the time run() returns.
-    with patch("tray.gui_root.init_root"):
+    with patch("tray.gui_root.init_root"), patch("tray.single_instance.acquire", return_value=True),             patch("tray._use_windows_trust_store"):
         with patch("tray.DictationApp") as mock_app_cls:
             mock_app = MagicMock()
             mock_app._startup_failed = True
@@ -321,3 +327,69 @@ def test_dialog_open_guard_cleared_even_if_dialog_raises():
         with pytest.raises(RuntimeError):
             app._edit_api_keys(app._icon, None)
     assert app._dialog_open is False
+
+
+def test_stale_win_key_does_not_turn_bare_ctrl_into_the_hotkey(monkeypatch):
+    from pynput import keyboard
+
+    # Real pruning, with only Ctrl physically down (Win's key-up was missed).
+    import importlib
+
+    monkeypatch.undo()  # drop the autouse fake first so we capture the real function
+    real_prune = importlib.import_module("hotkey_combo").prune_released
+    monkeypatch.setattr("tray.hotkey_combo.prune_released",
+                        lambda held, is_down=None: real_prune(held, is_down=lambda vk: vk == 0xA2))
+    app = _make_app()
+    app._groq_key = "g"
+    app._mistral_client = MagicMock()
+    app._listener = MagicMock()
+    app._listener.canonical.side_effect = lambda k: k
+    app._held_keys = {keyboard.Key.cmd}  # stale: Win released earlier, never seen
+    app._on_press(keyboard.Key.ctrl)
+    assert app._combo_engaged is False
+
+
+def test_main_exits_quietly_if_another_instance_is_running():
+    with patch("tray.single_instance.acquire", return_value=False), patch("tray.gui_root.init_root") as init_root:
+        with pytest.raises(SystemExit) as exc:
+            tray.main()
+    assert exc.value.code == 0
+    init_root.assert_not_called()
+
+
+def test_main_enables_windows_trust_store():
+    with patch("tray.gui_root.init_root"), patch("tray.single_instance.acquire", return_value=True),             patch("tray._use_windows_trust_store") as trust, patch("tray.DictationApp") as mock_app_cls:
+        mock_app_cls.return_value._startup_failed = False
+        tray.main()
+    trust.assert_called_once()
+
+
+def test_mic_failure_does_not_escape_the_keyboard_listener_callback():
+    # pynput stops its listener if a callback raises; a mic that won't open
+    # must not take the hotkey down with it.
+    app = _make_app()
+    app._groq_key = "g"
+    app._mistral_client = MagicMock()
+    app._listener = MagicMock()
+    app._listener.canonical.side_effect = lambda k: k
+    with patch.object(app, "_recorder") as mock_recorder, patch.object(app, "_icon"):
+        mock_recorder.start.side_effect = RuntimeError("Device unavailable")
+        for key in app._hotkey_combo:
+            app._on_press(key)  # must not raise
+        assert app._combo_engaged is False
+        assert app._hotkey_sm.state == "idle"
+        # status must not be left showing "recording"
+        assert app._icon.title.endswith("(idle)")
+        # and the hotkey still works afterwards
+        mock_recorder.start.side_effect = None
+        for key in list(app._hotkey_combo):
+            app._on_release(key)
+        for key in app._hotkey_combo:
+            app._on_press(key)
+        assert app._combo_engaged is True
+
+
+def test_trust_store_failure_is_non_fatal(capsys):
+    with patch.dict(sys.modules, {"truststore": None}):
+        tray._use_windows_trust_store()
+    assert "Windows trust store" in capsys.readouterr().out

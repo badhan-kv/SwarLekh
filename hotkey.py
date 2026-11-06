@@ -65,6 +65,11 @@ class HotkeyStateMachine:
             self._state = STATE_IDLE
         # STATE_IDLE / STATE_TOGGLE_RECORDING: ignore stray key-up.
 
+    def reset(self) -> None:
+        """Force back to idle, e.g. after a start/stop callback raised."""
+        self._state = STATE_IDLE
+        self._pressed_at = None
+
     def cancel(self) -> None:
         """Call when a non-combo key joins mid-press — this wasn't our hotkey
         after all (e.g. the user was actually pressing Ctrl+Shift+N).

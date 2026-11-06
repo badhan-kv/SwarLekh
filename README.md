@@ -56,7 +56,7 @@ access) and/or its `Startup\` subfolder (to auto-start at login).
 
 ```
 pip install -r requirements-build.txt
-nuitka --onefile --standalone --zig --enable-plugin=tk-inter ^
+nuitka --standalone --zig --enable-plugin=tk-inter ^
   --windows-console-mode=disable --windows-icon-from-ico=assets/swarlekh_icon.ico ^
   --include-module=keyring.backends.Windows --include-package=mistralai ^
   --output-filename=SwarLekh.exe --output-dir=dist_nuitka tray.py

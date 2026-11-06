@@ -61,5 +61,50 @@ def strs_to_combo(names) -> set:
     return {str_to_key(n) for n in names}
 
 
+# Windows virtual-key codes for each side of every modifier (GetAsyncKeyState
+# distinguishes left/right, so a modifier counts as down if either side is).
+_MODIFIER_VKS = {
+    "ctrl": (0xA2, 0xA3),
+    "alt": (0xA4, 0xA5),
+    "shift": (0xA0, 0xA1),
+    "win": (0x5B, 0x5C),
+}
+
+
+def _default_is_down(vk: int) -> bool:
+    import ctypes
+
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def prune_released(held_keys, is_down=None) -> set:
+    """Return `held_keys` minus any key the OS reports as not physically down.
+
+    The listener's own held-key bookkeeping can go stale when a key-up is never
+    delivered to the hook (Win+L / Win+D, UAC or lock-screen focus, the Start
+    menu consuming the Win release). A stale 'win' would make a bare Ctrl press
+    look like Ctrl+Win. Only modifiers and letters/digits are checked; any other
+    key is kept as-is. If the OS query fails, the set is returned unchanged.
+    """
+    is_down = is_down or _default_is_down
+    kept = set()
+    for key in held_keys:
+        name = key_to_str(key)
+        if name in _MODIFIER_VKS:
+            vks = _MODIFIER_VKS[name]
+        elif name and len(name) == 1 and name.isascii() and name.isalnum():
+            vks = (ord(name.upper()),)
+        else:
+            kept.add(key)
+            continue
+        try:
+            down = any(is_down(vk) for vk in vks)
+        except Exception:
+            return set(held_keys)
+        if down:
+            kept.add(key)
+    return kept
+
+
 def combo_label(names) -> str:
     return "+".join(_DISPLAY_NAME.get(n, n.upper()) for n in names)

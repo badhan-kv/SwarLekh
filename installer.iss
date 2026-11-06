@@ -47,7 +47,9 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "startupicon"; Description: "Launch {#MyAppName} automatically when I log in"; GroupDescription: "Additional shortcuts:"
 
 [Files]
-Source: "dist_nuitka\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; Standalone (folder) build, not --onefile: a onefile exe unpacks ~45 MB into
+; %TEMP% on every launch, which is slow and fragile at login.
+Source: "dist_nuitka\tray.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

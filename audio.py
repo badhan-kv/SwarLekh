@@ -1,6 +1,7 @@
 """Microphone capture — start/stop recording of arbitrary duration to WAV bytes."""
 
 import io
+import time
 import wave
 
 import numpy as np
@@ -9,6 +10,8 @@ import sounddevice as sd
 SAMPLE_RATE = 16000
 CHANNELS = 1
 DTYPE = "int16"
+OPEN_ATTEMPTS = 3
+OPEN_RETRY_DELAY_SECONDS = 0.3
 
 
 def _to_wav_bytes(audio: np.ndarray, sample_rate: int, channels: int) -> bytes:
@@ -34,21 +37,34 @@ class Recorder:
     def _callback(self, indata, frames, time_info, status):
         self._frames.append(indata.copy())
 
-    def start(self) -> None:
+    def start(self, attempts: int = OPEN_ATTEMPTS, retry_delay: float = OPEN_RETRY_DELAY_SECONDS) -> None:
+        """Open the mic. "Device unavailable" is often transient (the audio
+        stack still waking up right after login, or another app briefly holding
+        the device), so retry a few times before giving up."""
         self._frames = []
-        self._stream = sd.InputStream(
-            samplerate=self._sample_rate,
-            channels=self._channels,
-            dtype=self._dtype,
-            callback=self._callback,
-        )
-        self._stream.start()
+        for attempt in range(1, attempts + 1):
+            try:
+                self._stream = sd.InputStream(
+                    samplerate=self._sample_rate,
+                    channels=self._channels,
+                    dtype=self._dtype,
+                    callback=self._callback,
+                )
+                self._stream.start()
+                return
+            except sd.PortAudioError:
+                self._stream = None
+                if attempt == attempts:
+                    raise
+                time.sleep(retry_delay)
 
     def stop(self) -> bytes:
-        """Stop recording and return the captured audio as WAV bytes."""
-        self._stream.stop()
-        self._stream.close()
-        self._stream = None
+        """Stop recording and return the captured audio as WAV bytes. Safe to
+        call when start() failed or never ran (returns empty audio)."""
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
         if self._frames:
             audio = np.concatenate(self._frames, axis=0)
         else:

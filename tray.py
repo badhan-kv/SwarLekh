@@ -17,6 +17,7 @@ import history
 import hotkey_combo
 import mistral_cleanup
 import paste
+import single_instance
 from hotkey import HotkeyStateMachine
 from retry import get_status
 
@@ -141,9 +142,22 @@ class DictationApp:
         self._icon.icon = branding.tray_icon(recording=recording)
         self._icon.title = f"{APP_NAME} (recording)" if recording else f"{APP_NAME} (idle)"
 
+    def _notify(self, message: str) -> None:
+        try:
+            self._icon.notify(message, APP_NAME)
+        except Exception:
+            pass  # a missing balloon must never break the caller
+
     def _on_start_recording(self) -> None:
         self._set_status(recording=True)
-        self._recorder.start()
+        try:
+            self._recorder.start()
+        except Exception:
+            # Mic couldn't be opened (device busy/unavailable). Don't leave the
+            # icon showing "recording"; the caller logs the traceback.
+            self._set_status(recording=False)
+            self._notify("Couldn't open the microphone (in use by another app, or not ready yet). Try again.")
+            raise
 
     def _on_stop_recording(self) -> None:
         self._set_status(recording=False)
@@ -187,12 +201,40 @@ class DictationApp:
         can't fight over inconsistent state."""
         if not self._has_credentials_or_start_resolving():
             return
-        self._hotkey_sm.on_key_down()
-        self._hotkey_sm.on_key_up()
+        try:
+            self._hotkey_sm.on_key_down()
+            self._hotkey_sm.on_key_up()
+        except Exception:
+            self._hotkey_sm.reset()
+            traceback.print_exc()
 
+    # pynput STOPS its listener if a callback raises, which would silently kill
+    # the hotkey until the app is restarted. These wrappers make sure nothing
+    # (e.g. a mic that won't open) can escape into the listener thread.
     def _on_press(self, key) -> None:
+        try:
+            self._handle_press(key)
+        except Exception:
+            self._combo_engaged = False
+            self._hotkey_sm.reset()
+            traceback.print_exc()
+
+    def _on_release(self, key) -> None:
+        try:
+            self._handle_release(key)
+        except Exception:
+            self._combo_engaged = False
+            self._hotkey_sm.reset()
+            traceback.print_exc()
+
+    def _handle_press(self, key) -> None:
         key = self._listener.canonical(key)  # normalize ctrl_l/ctrl_r etc. to one generic key
         self._held_keys.add(key)
+        if not self._combo_engaged:
+            # Drop keys whose key-up we never saw (e.g. Win after Win+L), so a
+            # bare Ctrl can't match Ctrl+Win off a stale 'win'.
+            self._held_keys = hotkey_combo.prune_released(self._held_keys)
+            self._held_keys.add(key)
         if not self._combo_engaged and self._held_keys == self._hotkey_combo:
             if not self._has_credentials_or_start_resolving():
                 # This press is swallowed; press the hotkey again once the
@@ -206,7 +248,7 @@ class DictationApp:
             self._combo_engaged = False
             self._hotkey_sm.cancel()
 
-    def _on_release(self, key) -> None:
+    def _handle_release(self, key) -> None:
         key = self._listener.canonical(key)
         self._held_keys.discard(key)
         if self._combo_engaged and key in self._hotkey_combo and not self._hotkey_combo.issubset(self._held_keys):
@@ -290,8 +332,25 @@ class DictationApp:
         gui_root.get_root().after(0, gui_root.get_root().destroy)
 
 
+def _use_windows_trust_store() -> None:
+    """Make Python's TLS (requests for Groq, httpx for Mistral) trust the
+    Windows certificate store. On networks with TLS inspection the corporate
+    root CA lives there, not in the certifi bundle Python ships with, which
+    otherwise fails with "self-signed certificate in certificate chain"."""
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception as exc:
+        print(f"SwarLekh: could not use the Windows trust store ({exc}); using bundled CA certificates.")
+
+
 def main() -> None:
     _ensure_output_streams()
+    if not single_instance.acquire():
+        print("SwarLekh: another instance is already running — exiting.")
+        sys.exit(0)
+    _use_windows_trust_store()
     gui_root.init_root()
     app = DictationApp()
     app.run()  # blocks until quit, or a startup failure tears down the GUI root

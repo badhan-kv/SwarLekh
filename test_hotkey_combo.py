@@ -53,3 +53,30 @@ def test_strs_to_combo_roundtrip():
 def test_combo_label_formats_display_names():
     assert hotkey_combo.combo_label(["ctrl", "win"]) == "Ctrl+Win"
     assert hotkey_combo.combo_label(["alt", "z"]) == "Alt+Z"
+
+
+def test_prune_released_drops_stale_win_so_bare_ctrl_is_not_ctrl_win():
+    from pynput import keyboard
+
+    held = {keyboard.Key.ctrl, keyboard.Key.cmd}
+    down_vks = {0xA2}  # only left Ctrl is physically down
+    kept = hotkey_combo.prune_released(held, is_down=lambda vk: vk in down_vks)
+    assert kept == {keyboard.Key.ctrl}
+
+
+def test_prune_released_keeps_genuinely_held_combo():
+    from pynput import keyboard
+
+    held = {keyboard.Key.ctrl, keyboard.Key.cmd}
+    kept = hotkey_combo.prune_released(held, is_down=lambda vk: vk in {0xA3, 0x5B})
+    assert kept == held
+
+
+def test_prune_released_returns_input_if_os_query_fails():
+    from pynput import keyboard
+
+    def boom(vk):
+        raise OSError
+
+    held = {keyboard.Key.ctrl, keyboard.Key.cmd}
+    assert hotkey_combo.prune_released(held, is_down=boom) == held
