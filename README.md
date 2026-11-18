@@ -72,6 +72,13 @@ the tray icon does the same as a quick tap. Change the hotkey any time via
 the tray menu's **"Change hotkey..."** — press and hold your desired
 combination, release, and it's saved immediately.
 
+The tray icon shows the state: **indigo** = idle, **red** = recording,
+**amber with a ring** = transcribing/cleaning up. If the cleanup step fails
+(rate limit, network), the raw transcript is pasted instead and a
+notification explains why; a recording with no speech also shows a
+notification. Diagnostics (with timestamps) go to
+`%LOCALAPPDATA%\SwarLekh\swarlekh.log`.
+
 Other tray menu options: **"Edit API Keys..."** to update your Groq/Mistral
 keys, and **"Change save location..."** to choose where transcripts are
 saved.

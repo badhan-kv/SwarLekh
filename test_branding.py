@@ -32,3 +32,11 @@ def test_save_ico_creates_multi_resolution_file(tmp_path):
     assert ico_path.exists()
     with Image.open(ico_path) as img:
         assert img.format == "ICO"
+
+
+def test_tray_icon_processing_differs_from_idle_and_recording():
+    idle = branding.tray_icon(False, 64)
+    processing = branding.tray_icon(False, 64, processing=True)
+    recording = branding.tray_icon(True, 64)
+    assert processing.tobytes() != idle.tobytes()
+    assert processing.tobytes() != recording.tobytes()

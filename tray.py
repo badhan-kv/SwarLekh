@@ -2,6 +2,7 @@
 
 import sys
 import threading
+import time
 import traceback
 
 import pystray
@@ -66,6 +67,11 @@ def _exclusive_dialog(method):
     return wrapper
 
 
+def _log(message: str) -> None:
+    """Timestamped diagnostic line (stdout is redirected to swarlekh.log in the exe)."""
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} SwarLekh: {message}", flush=True)
+
+
 def _is_auth_error(exc: Exception) -> bool:
     """True if `exc` looks like a rejected/invalid API key (401/403), from
     either groq_client's requests.HTTPError or mistral_cleanup's MistralError."""
@@ -99,6 +105,9 @@ class DictationApp:
         self._resolving_credentials = False  # guards against overlapping prompt threads
         self._dialog_open = False  # guards against stacked tray-menu dialogs, see _exclusive_dialog
         self._startup_failed = False
+        self._recording = False
+        self._processing = 0  # clips still being transcribed/cleaned up
+        self._status_lock = threading.Lock()
 
     def ensure_credentials(self) -> bool:
         """Use cached keys if we already have them; otherwise load from disk or
@@ -138,9 +147,22 @@ class DictationApp:
             threading.Thread(target=self._resolve_credentials_async, daemon=True).start()
         return False
 
-    def _set_status(self, recording: bool) -> None:
-        self._icon.icon = branding.tray_icon(recording=recording)
-        self._icon.title = f"{APP_NAME} (recording)" if recording else f"{APP_NAME} (idle)"
+    def _set_status(self, recording: bool | None = None, processing_delta: int = 0) -> None:
+        """Refresh the tray icon/tooltip: red = recording, amber = clips still
+        being transcribed/cleaned up, indigo = idle."""
+        with self._status_lock:
+            if recording is not None:
+                self._recording = recording
+            self._processing = max(0, self._processing + processing_delta)
+            recording_now, processing_now = self._recording, self._processing
+        self._icon.icon = branding.tray_icon(recording=recording_now, processing=processing_now > 0)
+        if recording_now:
+            state = "recording"
+        elif processing_now:
+            state = "processing..."
+        else:
+            state = "idle"
+        self._icon.title = f"{APP_NAME} ({state})"
 
     def _notify(self, message: str) -> None:
         try:
@@ -150,6 +172,7 @@ class DictationApp:
 
     def _on_start_recording(self) -> None:
         self._set_status(recording=True)
+        _log("recording started")
         try:
             self._recorder.start()
         except Exception:
@@ -162,23 +185,46 @@ class DictationApp:
     def _on_stop_recording(self) -> None:
         self._set_status(recording=False)
         wav_bytes = self._recorder.stop()
-        threading.Thread(target=self._process, args=(wav_bytes,), daemon=True).start()
+        _log(f"recording stopped, {len(wav_bytes)} bytes of audio")
+        self._set_status(processing_delta=1)
+        threading.Thread(target=self._process_tracked, args=(wav_bytes,), daemon=True).start()
+
+    def _process_tracked(self, wav_bytes: bytes) -> None:
+        try:
+            self._process(wav_bytes)
+        finally:
+            self._set_status(processing_delta=-1)
 
     def _on_cancel_recording(self) -> None:
         """A foreign key joined mid-press (e.g. this was Ctrl+Shift+N, not our
         hotkey) — stop and discard, do not transcribe/paste/log it."""
         self._set_status(recording=False)
         self._recorder.stop()
+        _log("recording cancelled (another key joined the hotkey)")
 
     def _process(self, wav_bytes: bytes) -> None:
+        raw_transcript = None
         try:
+            started = time.monotonic()
             raw_transcript = groq_client.transcribe(wav_bytes, api_key=self._groq_key)
+            _log(f"transcribed in {time.monotonic() - started:.1f}s: {len(raw_transcript)} chars")
             if not raw_transcript.strip():
-                # Accidental tap with no speech (or pure silence) — nothing to
-                # clean up or paste; skip Mistral, clipboard, and history entirely.
+                # Whisper heard nothing (silence, too-quiet or too-short clip).
+                _log("empty transcript — nothing to paste")
+                self._notify("No speech detected in that recording.")
                 return
             mode, transcript = command_router.route(raw_transcript)
-            output = mistral_cleanup.clean(self._mistral_client, mode, transcript)
+            try:
+                output = mistral_cleanup.clean(self._mistral_client, mode, transcript)
+            except Exception as exc:
+                if _is_auth_error(exc):
+                    raise
+                # Cleanup is a nicety; never lose the dictation because it failed
+                # (rate limit, timeout). Paste the raw transcript instead.
+                _log(f"cleanup failed ({exc!r}) — pasting the raw transcript instead")
+                traceback.print_exc()
+                self._notify("Text cleanup failed (rate limit or network) — pasted the raw transcript.")
+                output = transcript
             if mistral_cleanup.has_unclear_segment(output):
                 print(
                     "SwarLekh: part of this dictation was too unclear to "
@@ -186,13 +232,21 @@ class DictationApp:
                 )
             paste.paste_text(output)
             history.record_dictation(mode, raw_transcript, output)
+            _log(f"pasted {len(output)} chars, total {time.monotonic() - started:.1f}s")
         except Exception as exc:
             if _is_auth_error(exc):
                 print("SwarLekh: API key was rejected — clearing cached keys, you'll be prompted next time.")
                 config.logout()
                 self._groq_key = None
                 self._mistral_client = None
+            _log(f"dictation failed: {exc!r}")
             traceback.print_exc()
+            if raw_transcript and raw_transcript.strip():
+                try:
+                    paste.paste_text(raw_transcript)
+                except Exception:
+                    pass
+            self._notify("Dictation failed — see swarlekh.log. Check your connection / API keys.")
 
     def _on_icon_click(self, icon, item) -> None:
         """Clicking the tray icon acts like a quick keyboard tap of the

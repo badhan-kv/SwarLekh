@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 
 IDLE_COLOR = (43, 42, 110)  # deep indigo
 RECORDING_COLOR = (196, 30, 30)  # red
+PROCESSING_COLOR = (214, 130, 0)  # amber
 BAR_COLOR = (255, 255, 255)  # white
 
 _BAR_HEIGHT_RATIOS = [0.32, 0.55, 0.85, 0.55, 0.32]
@@ -48,12 +49,15 @@ def logo(size: int = 256) -> Image.Image:
     return _soundwave_badge(size, IDLE_COLOR)
 
 
-def tray_icon(recording: bool, size: int = 64) -> Image.Image:
+def tray_icon(recording: bool = False, size: int = 64, processing: bool = False) -> Image.Image:
     """Small tray-icon variant: solid indigo circle when idle; red circle
     with a white ring while recording — two independent signals (color AND
     shape) so the state is clear even at a glance or without color vision."""
     if recording:
         return _soundwave_badge(size, RECORDING_COLOR, ring=True)
+    if processing:
+        # Amber (not red) so "transcribing/cleaning up" reads differently from "recording".
+        return _soundwave_badge(size, PROCESSING_COLOR, bar_color=(255, 255, 255), ring=True)
     return _soundwave_badge(size, IDLE_COLOR)
 
 
