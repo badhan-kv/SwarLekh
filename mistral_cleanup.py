@@ -12,6 +12,8 @@ is now scoped to what it's actually reliable at: disfluency removal and (in
 notes mode) topic grouping — nothing else.
 """
 
+import re
+
 from mistralai.client import Mistral
 from mistralai.client.errors import MistralError
 
@@ -145,6 +147,14 @@ def _is_zero_allowance(exc) -> bool:
         return False
 
 
+def strip_markdown(text: str) -> str:
+    """Remove Markdown emphasis/code/heading characters the model emits despite
+    being told not to (e.g. '**there**'). The prompt alone is not reliable, so
+    this is enforced deterministically on every model response."""
+    text = re.sub(r"[*`]+", "", text)
+    return re.sub(r"(?m)^[ \t]*#+[ \t]+", "", text)
+
+
 MAX_VERIFY_RETRIES = 2
 MAX_ADDED_WORDS = 2  # transcribe mode: more new words than this means the model answered
 
@@ -186,7 +196,7 @@ def clean(
             if exc.status_code == 429 and _is_zero_allowance(exc):
                 raise RuntimeError(MODEL_NOT_ON_TIER_HINT.format(model=model)) from exc
             raise
-        return response.choices[0].message.content
+        return strip_markdown(response.choices[0].message.content)
 
     output = with_retries(call, get_status=get_status, get_retry_after=_get_retry_after, on_retry=on_retry)
 
